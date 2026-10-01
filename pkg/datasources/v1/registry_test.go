@@ -4,21 +4,34 @@
 package v1
 
 import (
+	"context"
 	"testing"
 
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/types/known/structpb"
 
-	"go.uber.org/mock/gomock"
-	mock_v1 "github.com/mindersec/minder/pkg/datasources/v1/mock"
+	"github.com/mindersec/minder/pkg/engine/v1/interfaces"
 )
+
+type dummyDataSourceFuncDef struct{}
+
+func (d *dummyDataSourceFuncDef) ValidateArgs(obj any) error { return nil }
+func (d *dummyDataSourceFuncDef) ValidateUpdate(obj *structpb.Struct) error { return nil }
+func (d *dummyDataSourceFuncDef) Call(ctx context.Context, ingest *interfaces.Ingested, args any) (any, error) { return nil, nil }
+func (d *dummyDataSourceFuncDef) GetArgsSchema() *structpb.Struct { return nil }
+
+type dummyDataSource struct {
+	funcs map[DataSourceFuncKey]DataSourceFuncDef
+}
+
+func (d *dummyDataSource) GetFuncs() map[DataSourceFuncKey]DataSourceFuncDef {
+	return d.funcs
+}
 
 func TestDataSourceRegistry_RegisterDataSource(t *testing.T) {
 	t.Parallel()
 
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	mockFuncDef := mock_v1.NewMockDataSourceFuncDef(ctrl)
+	dummyDef := &dummyDataSourceFuncDef{}
 	
 	tests := []struct {
 		name       string
@@ -31,7 +44,7 @@ func TestDataSourceRegistry_RegisterDataSource(t *testing.T) {
 			name:   "register successful",
 			dsName: "testds",
 			funcs: map[DataSourceFuncKey]DataSourceFuncDef{
-				DataSourceFuncKey("func1"): mockFuncDef,
+				DataSourceFuncKey("func1"): dummyDef,
 			},
 			wantErr: false,
 		},
@@ -43,10 +56,9 @@ func TestDataSourceRegistry_RegisterDataSource(t *testing.T) {
 			t.Parallel()
 
 			reg := NewDataSourceRegistry()
-			mockDS := mock_v1.NewMockDataSource(ctrl)
-			mockDS.EXPECT().GetFuncs().Return(tc.funcs).AnyTimes()
+			ds := &dummyDataSource{funcs: tc.funcs}
 
-			err := reg.RegisterDataSource(tc.dsName, mockDS)
+			err := reg.RegisterDataSource(tc.dsName, ds)
 			if tc.wantErr {
 				require.Error(t, err)
 				if tc.errorIs != nil {
@@ -70,22 +82,19 @@ func TestDataSourceRegistry_RegisterDataSource(t *testing.T) {
 func TestDataSourceRegistry_DuplicateRegistration(t *testing.T) {
 	t.Parallel()
 
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	mockFuncDef := mock_v1.NewMockDataSourceFuncDef(ctrl)
-
+	dummyDef := &dummyDataSourceFuncDef{}
 	reg := NewDataSourceRegistry()
-	mockDS := mock_v1.NewMockDataSource(ctrl)
-	mockDS.EXPECT().GetFuncs().Return(map[DataSourceFuncKey]DataSourceFuncDef{
-		DataSourceFuncKey("func1"): mockFuncDef,
-	}).AnyTimes()
+	ds := &dummyDataSource{
+		funcs: map[DataSourceFuncKey]DataSourceFuncDef{
+			DataSourceFuncKey("func1"): dummyDef,
+		},
+	}
 
-	err := reg.RegisterDataSource("testds", mockDS)
+	err := reg.RegisterDataSource("testds", ds)
 	require.NoError(t, err)
 
 	// Registering again with same name and same function key should fail
-	err = reg.RegisterDataSource("testds", mockDS)
+	err = reg.RegisterDataSource("testds", ds)
 	require.Error(t, err)
 	require.ErrorIs(t, err, ErrDuplicateDataSourceFuncKey)
 }
@@ -93,28 +102,26 @@ func TestDataSourceRegistry_DuplicateRegistration(t *testing.T) {
 func TestDataSourceRegistry_GetFuncs(t *testing.T) {
 	t.Parallel()
 
-	ctrl := gomock.NewController(t)
-	defer ctrl.Finish()
-
-	mockFuncDef1 := mock_v1.NewMockDataSourceFuncDef(ctrl)
-	mockFuncDef2 := mock_v1.NewMockDataSourceFuncDef(ctrl)
+	dummyDef1 := &dummyDataSourceFuncDef{}
+	dummyDef2 := &dummyDataSourceFuncDef{}
 
 	reg := NewDataSourceRegistry()
-	mockDS1 := mock_v1.NewMockDataSource(ctrl)
-	mockDS1.EXPECT().GetFuncs().Return(map[DataSourceFuncKey]DataSourceFuncDef{
-		DataSourceFuncKey("func1"): mockFuncDef1,
-	}).AnyTimes()
+	ds1 := &dummyDataSource{
+		funcs: map[DataSourceFuncKey]DataSourceFuncDef{
+			DataSourceFuncKey("func1"): dummyDef1,
+		},
+	}
+	ds2 := &dummyDataSource{
+		funcs: map[DataSourceFuncKey]DataSourceFuncDef{
+			DataSourceFuncKey("func2"): dummyDef2,
+		},
+	}
 
-	mockDS2 := mock_v1.NewMockDataSource(ctrl)
-	mockDS2.EXPECT().GetFuncs().Return(map[DataSourceFuncKey]DataSourceFuncDef{
-		DataSourceFuncKey("func2"): mockFuncDef2,
-	}).AnyTimes()
-
-	require.NoError(t, reg.RegisterDataSource("testds1", mockDS1))
-	require.NoError(t, reg.RegisterDataSource("testds2", mockDS2))
+	require.NoError(t, reg.RegisterDataSource("testds1", ds1))
+	require.NoError(t, reg.RegisterDataSource("testds2", ds2))
 
 	funcs := reg.GetFuncs()
 	require.Len(t, funcs, 2)
-	require.Equal(t, mockFuncDef1, funcs[makeKey("testds1", DataSourceFuncKey("func1"))])
-	require.Equal(t, mockFuncDef2, funcs[makeKey("testds2", DataSourceFuncKey("func2"))])
+	require.Equal(t, dummyDef1, funcs[makeKey("testds1", DataSourceFuncKey("func1"))])
+	require.Equal(t, dummyDef2, funcs[makeKey("testds2", DataSourceFuncKey("func2"))])
 }
